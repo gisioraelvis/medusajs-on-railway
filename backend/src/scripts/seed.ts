@@ -20,6 +20,223 @@ import {
   updateStoresWorkflow,
 } from "@medusajs/medusa/core-flows";
 
+async function cleanupExistingData(container: any) {
+  const logger = container.resolve(ContainerRegistrationKeys.LOGGER);
+  const query = container.resolve(ContainerRegistrationKeys.QUERY);
+  const productModuleService = container.resolve(Modules.PRODUCT);
+  const regionModuleService = container.resolve(Modules.REGION);
+  const stockLocationModuleService = container.resolve(Modules.STOCK_LOCATION);
+  const apiKeyModuleService = container.resolve(Modules.API_KEY);
+  const salesChannelModuleService = container.resolve(Modules.SALES_CHANNEL);
+  const fulfillmentModuleService = container.resolve(Modules.FULFILLMENT);
+
+  logger.info("Starting database cleanup...");
+
+  try {
+    // Delete inventory levels and items
+    logger.info("Cleaning inventory levels...");
+    try {
+      const { data: inventoryItems } = await query.graph({
+        entity: "inventory_item",
+        fields: ["id"],
+      });
+
+      if (inventoryItems.length > 0) {
+        const inventoryModuleService = container.resolve(Modules.INVENTORY);
+        for (const item of inventoryItems) {
+          try {
+            const levels = await inventoryModuleService.listInventoryLevels({
+              inventory_item_id: item.id,
+            });
+            for (const level of levels) {
+              await inventoryModuleService.deleteInventoryLevels([level.id]);
+            }
+            await inventoryModuleService.deleteInventoryItems([item.id]);
+          } catch (error: any) {
+            logger.warn(
+              `Failed to delete inventory item ${item.id}: ${
+                error.message || error
+              }`
+            );
+          }
+        }
+      }
+    } catch (error: any) {
+      logger.warn(`Failed to clean inventory: ${error.message || error}`);
+    }
+
+    // Delete products
+    logger.info("Cleaning products...");
+    try {
+      const products = await productModuleService.listProducts({});
+      if (products.length > 0) {
+        for (const product of products) {
+          try {
+            await productModuleService.deleteProducts([product.id]);
+          } catch (err: any) {
+            logger.warn(
+              `Failed to delete product ${product.id}: ${err.message || err}`
+            );
+          }
+        }
+      }
+    } catch (error: any) {
+      logger.warn(`Failed to clean products: ${error.message || error}`);
+    }
+
+    // Delete product categories
+    logger.info("Cleaning product categories...");
+    try {
+      const categories = await productModuleService.listProductCategories({});
+      if (categories.length > 0) {
+        for (const category of categories) {
+          try {
+            await productModuleService.deleteProductCategories([category.id]);
+          } catch (err: any) {
+            logger.warn(
+              `Failed to delete category ${category.id}: ${err.message || err}`
+            );
+          }
+        }
+      }
+    } catch (error: any) {
+      logger.warn(`Failed to clean categories: ${error.message || error}`);
+    }
+
+    // Delete shipping options and fulfillment sets
+    logger.info("Cleaning shipping options and fulfillment sets...");
+    try {
+      const shippingOptions =
+        await fulfillmentModuleService.listShippingOptions({});
+      for (const option of shippingOptions) {
+        try {
+          await fulfillmentModuleService.deleteShippingOptions([option.id]);
+        } catch (err: any) {
+          logger.warn(
+            `Failed to delete shipping option ${option.id}: ${
+              err.message || err
+            }`
+          );
+        }
+      }
+
+      const fulfillmentSets =
+        await fulfillmentModuleService.listFulfillmentSets({});
+      for (const set of fulfillmentSets) {
+        try {
+          await fulfillmentModuleService.deleteFulfillmentSets([set.id]);
+        } catch (err: any) {
+          logger.warn(
+            `Failed to delete fulfillment set ${set.id}: ${err.message || err}`
+          );
+        }
+      }
+    } catch (error: any) {
+      logger.warn(
+        `Failed to clean fulfillment data: ${error.message || error}`
+      );
+    }
+
+    // Delete custom stock locations (keep default ones)
+    logger.info("Cleaning stock locations...");
+    try {
+      const stockLocations =
+        await stockLocationModuleService.listStockLocations({});
+      const customStockLocations = stockLocations.filter(
+        (loc: any) => !loc.name.toLowerCase().includes("default")
+      );
+      if (customStockLocations.length > 0) {
+        for (const location of customStockLocations) {
+          try {
+            await stockLocationModuleService.deleteStockLocations([
+              location.id,
+            ]);
+          } catch (err: any) {
+            logger.warn(
+              `Failed to delete stock location ${location.id}: ${
+                err.message || err
+              }`
+            );
+          }
+        }
+      }
+    } catch (error: any) {
+      logger.warn(`Failed to clean stock locations: ${error.message || error}`);
+    }
+
+    // Delete custom API keys (keep system ones)
+    logger.info("Cleaning API keys...");
+    try {
+      const apiKeys = await apiKeyModuleService.listApiKeys({});
+      const customApiKeys = apiKeys.filter(
+        (key: any) =>
+          key.title !== "System" && !key.title.toLowerCase().includes("system")
+      );
+      if (customApiKeys.length > 0) {
+        for (const apiKey of customApiKeys) {
+          try {
+            await apiKeyModuleService.deleteApiKeys([apiKey.id]);
+          } catch (err: any) {
+            logger.warn(
+              `Failed to delete API key ${apiKey.id}: ${err.message || err}`
+            );
+          }
+        }
+      }
+    } catch (error: any) {
+      logger.warn(`Failed to clean API keys: ${error.message || error}`);
+    }
+
+    // Delete regions
+    logger.info("Cleaning regions...");
+    try {
+      const regions = await regionModuleService.listRegions({});
+      if (regions.length > 0) {
+        for (const region of regions) {
+          try {
+            await regionModuleService.deleteRegions([region.id]);
+          } catch (err: any) {
+            logger.warn(
+              `Failed to delete region ${region.id}: ${err.message || err}`
+            );
+          }
+        }
+      }
+    } catch (error: any) {
+      logger.warn(`Failed to clean regions: ${error.message || error}`);
+    }
+
+    // Delete custom sales channels (keep default)
+    logger.info("Cleaning custom sales channels...");
+    try {
+      const salesChannels = await salesChannelModuleService.listSalesChannels(
+        {}
+      );
+      const customSalesChannels = salesChannels.filter(
+        (sc: any) => sc.name !== "Default Sales Channel"
+      );
+      for (const channel of customSalesChannels) {
+        try {
+          await salesChannelModuleService.deleteSalesChannels([channel.id]);
+        } catch (err: any) {
+          logger.warn(
+            `Failed to delete sales channel ${channel.id}: ${
+              err.message || err
+            }`
+          );
+        }
+      }
+    } catch (error: any) {
+      logger.warn(`Failed to clean sales channels: ${error.message || error}`);
+    }
+
+    logger.info("Database cleanup completed successfully.");
+  } catch (error: any) {
+    logger.error("Error during database cleanup:", error);
+    // Continue with seeding even if cleanup fails
+  }
+}
+
 export default async function seedDemoData({ container }: ExecArgs) {
   const logger = container.resolve(ContainerRegistrationKeys.LOGGER);
   const link = container.resolve(ContainerRegistrationKeys.LINK);
@@ -27,6 +244,9 @@ export default async function seedDemoData({ container }: ExecArgs) {
   const fulfillmentModuleService = container.resolve(Modules.FULFILLMENT);
   const salesChannelModuleService = container.resolve(Modules.SALES_CHANNEL);
   const storeModuleService = container.resolve(Modules.STORE);
+
+  // Clean existing data first to avoid conflicts
+  await cleanupExistingData(container);
 
   const countries = ["gb", "de", "dk", "se", "fr", "es", "it"];
 
@@ -89,7 +309,7 @@ export default async function seedDemoData({ container }: ExecArgs) {
   await createTaxRegionsWorkflow(container).run({
     input: countries.map((country_code) => ({
       country_code,
-      provider_id: "tp_system"
+      provider_id: "tp_system",
     })),
   });
   logger.info("Finished seeding tax regions.");
@@ -124,22 +344,22 @@ export default async function seedDemoData({ container }: ExecArgs) {
 
   logger.info("Seeding fulfillment data...");
   const shippingProfiles = await fulfillmentModuleService.listShippingProfiles({
-    type: "default"
-  })
-  let shippingProfile = shippingProfiles.length ? shippingProfiles[0] : null
+    type: "default",
+  });
+  let shippingProfile = shippingProfiles.length ? shippingProfiles[0] : null;
 
   if (!shippingProfile) {
     const { result: shippingProfileResult } =
-    await createShippingProfilesWorkflow(container).run({
-      input: {
-        data: [
-          {
-            name: "Default Shipping Profile",
-            type: "default",
-          },
-        ],
-      },
-    });
+      await createShippingProfilesWorkflow(container).run({
+        input: {
+          data: [
+            {
+              name: "Default Shipping Profile",
+              type: "default",
+            },
+          ],
+        },
+      });
     shippingProfile = shippingProfileResult[0];
   }
 
