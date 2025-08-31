@@ -175,10 +175,18 @@ async function cleanupExistingData(container: any) {
       if (customApiKeys.length > 0) {
         for (const apiKey of customApiKeys) {
           try {
+            // Revoke the API key before deleting, if not already revoked
+            if (!apiKey.revoked_at) {
+              await apiKeyModuleService.revoke(apiKey.id, {
+                revoked_by: "seed-script",
+              });
+            }
             await apiKeyModuleService.deleteApiKeys([apiKey.id]);
           } catch (err: any) {
             logger.warn(
-              `Failed to delete API key ${apiKey.id}: ${err.message || err}`
+              `Failed to revoke/delete API key ${apiKey.id}: ${
+                err.message || err
+              }`
             );
           }
         }
@@ -204,6 +212,28 @@ async function cleanupExistingData(container: any) {
       }
     } catch (error: any) {
       logger.warn(`Failed to clean regions: ${error.message || error}`);
+    }
+
+    // Delete tax regions
+    logger.info("Cleaning tax regions...");
+    try {
+      const taxModuleService = container.resolve(Modules.TAX);
+      const taxRegions = await taxModuleService.listTaxRegions({});
+      if (taxRegions.length > 0) {
+        for (const taxRegion of taxRegions) {
+          try {
+            await taxModuleService.deleteTaxRegions([taxRegion.id]);
+          } catch (err: any) {
+            logger.warn(
+              `Failed to delete tax region ${taxRegion.id}: ${
+                err.message || err
+              }`
+            );
+          }
+        }
+      }
+    } catch (error: any) {
+      logger.warn(`Failed to clean tax regions: ${error.message || error}`);
     }
 
     // Delete custom sales channels (keep default)
@@ -248,7 +278,20 @@ export default async function seedDemoData({ container }: ExecArgs) {
   // Clean existing data first to avoid conflicts
   await cleanupExistingData(container);
 
-  const countries = ["gb", "de", "dk", "se", "fr", "es", "it"];
+  // East African countries
+  const eastAfricanCountries = ["ke", "tz", "ug", "rw", "et", "ss"];
+
+  // North American countries
+  const northAmericanCountries = ["us", "ca"];
+
+  // European countries
+  const europeanCountries = ["gb", "de", "dk", "se", "fr", "es", "it"];
+
+  const allCountries = [
+    ...eastAfricanCountries,
+    ...northAmericanCountries,
+    ...europeanCountries,
+  ];
 
   logger.info("Seeding store data...");
   const [store] = await storeModuleService.listStores();
@@ -278,11 +321,14 @@ export default async function seedDemoData({ container }: ExecArgs) {
       update: {
         supported_currencies: [
           {
-            currency_code: "eur",
+            currency_code: "kes",
             is_default: true,
           },
           {
             currency_code: "usd",
+          },
+          {
+            currency_code: "eur",
           },
         ],
         default_sales_channel_id: defaultSalesChannel[0].id,
@@ -294,20 +340,34 @@ export default async function seedDemoData({ container }: ExecArgs) {
     input: {
       regions: [
         {
+          name: "East Africa",
+          currency_code: "kes",
+          countries: eastAfricanCountries,
+          payment_providers: ["pp_system_default"],
+        },
+        {
+          name: "North America",
+          currency_code: "usd",
+          countries: northAmericanCountries,
+          payment_providers: ["pp_system_default"],
+        },
+        {
           name: "Europe",
           currency_code: "eur",
-          countries,
+          countries: europeanCountries,
           payment_providers: ["pp_system_default"],
         },
       ],
     },
   });
-  const region = regionResult[0];
+  const eastAfricaRegion = regionResult[0];
+  const northAmericaRegion = regionResult[1];
+  const europeRegion = regionResult[2];
   logger.info("Finished seeding regions.");
 
   logger.info("Seeding tax regions...");
   await createTaxRegionsWorkflow(container).run({
-    input: countries.map((country_code) => ({
+    input: allCountries.map((country_code) => ({
       country_code,
       provider_id: "tp_system",
     })),
@@ -321,6 +381,22 @@ export default async function seedDemoData({ container }: ExecArgs) {
     input: {
       locations: [
         {
+          name: "East Africa Warehouse",
+          address: {
+            city: "Nairobi",
+            country_code: "KE",
+            address_1: "",
+          },
+        },
+        {
+          name: "US Warehouse",
+          address: {
+            city: "New York",
+            country_code: "US",
+            address_1: "",
+          },
+        },
+        {
           name: "European Warehouse",
           address: {
             city: "Copenhagen",
@@ -331,11 +407,31 @@ export default async function seedDemoData({ container }: ExecArgs) {
       ],
     },
   });
-  const stockLocation = stockLocationResult[0];
+  const eastAfricaStockLocation = stockLocationResult[0];
+  const usStockLocation = stockLocationResult[1];
+  const europeanStockLocation = stockLocationResult[2];
 
   await link.create({
     [Modules.STOCK_LOCATION]: {
-      stock_location_id: stockLocation.id,
+      stock_location_id: eastAfricaStockLocation.id,
+    },
+    [Modules.FULFILLMENT]: {
+      fulfillment_provider_id: "manual_manual",
+    },
+  });
+
+  await link.create({
+    [Modules.STOCK_LOCATION]: {
+      stock_location_id: usStockLocation.id,
+    },
+    [Modules.FULFILLMENT]: {
+      fulfillment_provider_id: "manual_manual",
+    },
+  });
+
+  await link.create({
+    [Modules.STOCK_LOCATION]: {
+      stock_location_id: europeanStockLocation.id,
     },
     [Modules.FULFILLMENT]: {
       fulfillment_provider_id: "manual_manual",
@@ -363,62 +459,172 @@ export default async function seedDemoData({ container }: ExecArgs) {
     shippingProfile = shippingProfileResult[0];
   }
 
-  const fulfillmentSet = await fulfillmentModuleService.createFulfillmentSets({
-    name: "European Warehouse delivery",
-    type: "shipping",
-    service_zones: [
-      {
-        name: "Europe",
-        geo_zones: [
-          {
-            country_code: "gb",
-            type: "country",
-          },
-          {
-            country_code: "de",
-            type: "country",
-          },
-          {
-            country_code: "dk",
-            type: "country",
-          },
-          {
-            country_code: "se",
-            type: "country",
-          },
-          {
-            country_code: "fr",
-            type: "country",
-          },
-          {
-            country_code: "es",
-            type: "country",
-          },
-          {
-            country_code: "it",
-            type: "country",
-          },
-        ],
-      },
-    ],
+  const eastAfricaFulfillmentSet =
+    await fulfillmentModuleService.createFulfillmentSets({
+      name: "East Africa Warehouse delivery",
+      type: "shipping",
+      service_zones: [
+        {
+          name: "East Africa",
+          geo_zones: eastAfricanCountries.map((country_code) => ({
+            country_code,
+            type: "country" as const,
+          })),
+        },
+      ],
+    });
+
+  const usFulfillmentSet = await fulfillmentModuleService.createFulfillmentSets(
+    {
+      name: "US Warehouse delivery",
+      type: "shipping",
+      service_zones: [
+        {
+          name: "North America",
+          geo_zones: northAmericanCountries.map((country_code) => ({
+            country_code,
+            type: "country" as const,
+          })),
+        },
+      ],
+    }
+  );
+
+  const europeanFulfillmentSet =
+    await fulfillmentModuleService.createFulfillmentSets({
+      name: "European Warehouse delivery",
+      type: "shipping",
+      service_zones: [
+        {
+          name: "Europe",
+          geo_zones: europeanCountries.map((country_code) => ({
+            country_code,
+            type: "country" as const,
+          })),
+        },
+      ],
+    });
+
+  await link.create({
+    [Modules.STOCK_LOCATION]: {
+      stock_location_id: eastAfricaStockLocation.id,
+    },
+    [Modules.FULFILLMENT]: {
+      fulfillment_set_id: eastAfricaFulfillmentSet.id,
+    },
   });
 
   await link.create({
     [Modules.STOCK_LOCATION]: {
-      stock_location_id: stockLocation.id,
+      stock_location_id: usStockLocation.id,
     },
     [Modules.FULFILLMENT]: {
-      fulfillment_set_id: fulfillmentSet.id,
+      fulfillment_set_id: usFulfillmentSet.id,
+    },
+  });
+
+  await link.create({
+    [Modules.STOCK_LOCATION]: {
+      stock_location_id: europeanStockLocation.id,
+    },
+    [Modules.FULFILLMENT]: {
+      fulfillment_set_id: europeanFulfillmentSet.id,
     },
   });
 
   await createShippingOptionsWorkflow(container).run({
     input: [
+      // East African shipping options
       {
-        name: "Standard Shipping",
+        name: "Standard Shipping - East Africa",
         price_type: "flat",
         provider_id: "manual_manual",
-        service_zone_id: fulfillmentSet.service_zones[0].id,
+        service_zone_id: eastAfricaFulfillmentSet.service_zones[0].id,
+        shipping_profile_id: shippingProfile.id,
+        type: {
+          label: "Standard",
+          description: "Ship in 3-5 days.",
+          code: "standard",
+        },
+        prices: [
+          {
+            currency_code: "kes",
+            amount: 800,
+          },
+          {
+            currency_code: "usd",
+            amount: 8,
+          },
+          {
+            currency_code: "eur",
+            amount: 8,
+          },
+          {
+            region_id: eastAfricaRegion.id,
+            amount: 800,
+          },
+        ],
+        rules: [
+          {
+            attribute: "enabled_in_store",
+            value: "true",
+            operator: "eq",
+          },
+          {
+            attribute: "is_return",
+            value: "false",
+            operator: "eq",
+          },
+        ],
+      },
+      {
+        name: "Express Shipping - East Africa",
+        price_type: "flat",
+        provider_id: "manual_manual",
+        service_zone_id: eastAfricaFulfillmentSet.service_zones[0].id,
+        shipping_profile_id: shippingProfile.id,
+        type: {
+          label: "Express",
+          description: "Ship in 1-2 days.",
+          code: "express",
+        },
+        prices: [
+          {
+            currency_code: "kes",
+            amount: 1500,
+          },
+          {
+            currency_code: "usd",
+            amount: 15,
+          },
+          {
+            currency_code: "eur",
+            amount: 15,
+          },
+          {
+            region_id: eastAfricaRegion.id,
+            amount: 1500,
+          },
+        ],
+        rules: [
+          {
+            attribute: "enabled_in_store",
+            value: "true",
+            operator: "eq",
+          },
+          {
+            attribute: "is_return",
+            value: "false",
+            operator: "eq",
+          },
+        ],
+      },
+      // US shipping options
+      {
+        name: "Standard Shipping - USA",
+        price_type: "flat",
+        provider_id: "manual_manual",
+        service_zone_id: usFulfillmentSet.service_zones[0].id,
         shipping_profile_id: shippingProfile.id,
         type: {
           label: "Standard",
@@ -428,14 +634,103 @@ export default async function seedDemoData({ container }: ExecArgs) {
         prices: [
           {
             currency_code: "usd",
-            amount: 10,
+            amount: 12,
           },
+          {
+            currency_code: "kes",
+            amount: 1560,
+          },
+          {
+            currency_code: "eur",
+            amount: 12,
+          },
+          {
+            region_id: northAmericaRegion.id,
+            amount: 12,
+          },
+        ],
+        rules: [
+          {
+            attribute: "enabled_in_store",
+            value: "true",
+            operator: "eq",
+          },
+          {
+            attribute: "is_return",
+            value: "false",
+            operator: "eq",
+          },
+        ],
+      },
+      {
+        name: "Express Shipping - USA",
+        price_type: "flat",
+        provider_id: "manual_manual",
+        service_zone_id: usFulfillmentSet.service_zones[0].id,
+        shipping_profile_id: shippingProfile.id,
+        type: {
+          label: "Express",
+          description: "Ship in 1-2 days.",
+          code: "express",
+        },
+        prices: [
+          {
+            currency_code: "usd",
+            amount: 25,
+          },
+          {
+            currency_code: "kes",
+            amount: 3250,
+          },
+          {
+            currency_code: "eur",
+            amount: 25,
+          },
+          {
+            region_id: northAmericaRegion.id,
+            amount: 25,
+          },
+        ],
+        rules: [
+          {
+            attribute: "enabled_in_store",
+            value: "true",
+            operator: "eq",
+          },
+          {
+            attribute: "is_return",
+            value: "false",
+            operator: "eq",
+          },
+        ],
+      },
+      // European shipping options
+      {
+        name: "Standard Shipping - Europe",
+        price_type: "flat",
+        provider_id: "manual_manual",
+        service_zone_id: europeanFulfillmentSet.service_zones[0].id,
+        shipping_profile_id: shippingProfile.id,
+        type: {
+          label: "Standard",
+          description: "Ship in 2-3 days.",
+          code: "standard",
+        },
+        prices: [
           {
             currency_code: "eur",
             amount: 10,
           },
           {
-            region_id: region.id,
+            currency_code: "kes",
+            amount: 1300, // ~10 EUR in KES
+          },
+          {
+            currency_code: "usd",
+            amount: 10,
+          },
+          {
+            region_id: europeRegion.id,
             amount: 10,
           },
         ],
@@ -453,10 +748,10 @@ export default async function seedDemoData({ container }: ExecArgs) {
         ],
       },
       {
-        name: "Express Shipping",
+        name: "Express Shipping - Europe",
         price_type: "flat",
         provider_id: "manual_manual",
-        service_zone_id: fulfillmentSet.service_zones[0].id,
+        service_zone_id: europeanFulfillmentSet.service_zones[0].id,
         shipping_profile_id: shippingProfile.id,
         type: {
           label: "Express",
@@ -465,16 +760,20 @@ export default async function seedDemoData({ container }: ExecArgs) {
         },
         prices: [
           {
-            currency_code: "usd",
-            amount: 10,
-          },
-          {
             currency_code: "eur",
-            amount: 10,
+            amount: 20,
           },
           {
-            region_id: region.id,
-            amount: 10,
+            currency_code: "kes",
+            amount: 2600, // ~20 EUR in KES
+          },
+          {
+            currency_code: "usd",
+            amount: 20,
+          },
+          {
+            region_id: europeRegion.id,
+            amount: 20,
           },
         ],
         rules: [
@@ -496,7 +795,21 @@ export default async function seedDemoData({ container }: ExecArgs) {
 
   await linkSalesChannelsToStockLocationWorkflow(container).run({
     input: {
-      id: stockLocation.id,
+      id: eastAfricaStockLocation.id,
+      add: [defaultSalesChannel[0].id],
+    },
+  });
+
+  await linkSalesChannelsToStockLocationWorkflow(container).run({
+    input: {
+      id: usStockLocation.id,
+      add: [defaultSalesChannel[0].id],
+    },
+  });
+
+  await linkSalesChannelsToStockLocationWorkflow(container).run({
+    input: {
+      id: europeanStockLocation.id,
       add: [defaultSalesChannel[0].id],
     },
   });
@@ -608,6 +921,10 @@ export default async function seedDemoData({ container }: ExecArgs) {
                   amount: 15,
                   currency_code: "usd",
                 },
+                {
+                  amount: 1200,
+                  currency_code: "kes",
+                },
               ],
             },
             {
@@ -625,6 +942,10 @@ export default async function seedDemoData({ container }: ExecArgs) {
                 {
                   amount: 15,
                   currency_code: "usd",
+                },
+                {
+                  amount: 1200,
+                  currency_code: "kes",
                 },
               ],
             },
@@ -1060,12 +1381,29 @@ export default async function seedDemoData({ container }: ExecArgs) {
 
   const inventoryLevels: CreateInventoryLevelInput[] = [];
   for (const inventoryItem of inventoryItems) {
-    const inventoryLevel = {
-      location_id: stockLocation.id,
+    // Add inventory for East Africa warehouse
+    const eastAfricaInventoryLevel = {
+      location_id: eastAfricaStockLocation.id,
       stocked_quantity: 1000000,
       inventory_item_id: inventoryItem.id,
     };
-    inventoryLevels.push(inventoryLevel);
+    inventoryLevels.push(eastAfricaInventoryLevel);
+
+    // Add inventory for US warehouse
+    const usInventoryLevel = {
+      location_id: usStockLocation.id,
+      stocked_quantity: 1000000,
+      inventory_item_id: inventoryItem.id,
+    };
+    inventoryLevels.push(usInventoryLevel);
+
+    // Add inventory for European warehouse
+    const europeanInventoryLevel = {
+      location_id: europeanStockLocation.id,
+      stocked_quantity: 1000000,
+      inventory_item_id: inventoryItem.id,
+    };
+    inventoryLevels.push(europeanInventoryLevel);
   }
 
   await createInventoryLevelsWorkflow(container).run({
