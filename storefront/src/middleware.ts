@@ -1,5 +1,4 @@
 import { HttpTypes } from "@medusajs/types"
-import { notFound } from "next/navigation"
 import { NextRequest, NextResponse } from "next/server"
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_MEDUSA_BACKEND_URL
@@ -30,7 +29,10 @@ async function getRegionMap() {
     }).then((res) => res.json())
 
     if (!regions?.length) {
-      notFound()
+      // If no regions are found, return null to indicate error
+      // This will be handled gracefully in the middleware
+      console.error("No regions found from Medusa backend")
+      return new Map()
     }
 
     // Create a map of country codes to regions.
@@ -97,6 +99,12 @@ export async function middleware(request: NextRequest) {
 
   const regionMap = await getRegionMap()
 
+  // If no regions are available, let the request continue
+  // The page will handle the error appropriately
+  if (!regionMap || regionMap.size === 0) {
+    return NextResponse.next()
+  }
+
   const countryCode = regionMap && (await getCountryCode(request, regionMap))
 
   const urlHasCountryCode =
@@ -142,5 +150,7 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!api|_next/static|favicon.ico|.*\\.png|.*\\.jpg|.*\\.gif|.*\\.svg).*)"], // prevents redirecting on static files
+  matcher: [
+    "/((?!api|_next/static|favicon.ico|.*\\.png|.*\\.jpg|.*\\.gif|.*\\.svg).*)",
+  ], // prevents redirecting on static files
 }

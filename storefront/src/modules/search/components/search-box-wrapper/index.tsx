@@ -7,10 +7,10 @@ import {
   useRef,
   useState,
 } from "react"
-import { UseSearchBoxProps, useSearchBox } from "react-instantsearch-hooks-web"
+import { UseSearchBoxProps, useSearchBox } from "react-instantsearch"
 
 export type ControlledSearchBoxProps = React.ComponentProps<"div"> & {
-  inputRef: RefObject<HTMLInputElement>
+  inputRef: RefObject<HTMLInputElement | null>
   onChange(event: ChangeEvent): void
   onReset(event: FormEvent): void
   onSubmit?(event: FormEvent): void
@@ -21,7 +21,7 @@ export type ControlledSearchBoxProps = React.ComponentProps<"div"> & {
 type SearchBoxProps = {
   children: (state: {
     value: string
-    inputRef: RefObject<HTMLInputElement>
+    inputRef: RefObject<HTMLInputElement | null>
     onChange: (event: ChangeEvent<HTMLInputElement>) => void
     onReset: () => void
     placeholder: string
